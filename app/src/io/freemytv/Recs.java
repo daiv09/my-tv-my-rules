@@ -36,10 +36,10 @@ import java.util.concurrent.Executors;
 /**
  * Home screen picks ("This morning / afternoon / tonight"): what's trending this week plus recent releases, only from
  * the streaming apps installed on the TV (Netflix, Prime Video, Disney+, Max, Apple TV, Okko, Hulu, Paramount+, Peacock,
- * Globoplay...), via TMDB (an open movie database that knows what streams where in each country). Three per hour.
- * "Watch" opens the service's app.
+ * Globoplay...), via Simkl trending or TMDB (what streams where in each country). Three per hour.
+ * "Watch" opens the service's app when TMDB matched a streaming app on the TV.
  *
- * Each person uses their own free TMDB key (config.properties "tmdb_key", built into the app). It never goes to the log.
+ * Simkl: config.properties "simkl_client_id". TMDB (optional): "tmdb_key". Keys are never logged.
  */
 final class Recs {
     static final class Pick {
@@ -60,7 +60,7 @@ final class Recs {
     private static final int ANIMATION = 16;
     private static final long LIST_EVERY = 6 * 3600_000L;
     /** Bump when what is saved for each title changes (the saved list is discarded and fetched again). */
-    private static final int CACHE_VERSION = 4;
+    private static final int CACHE_VERSION = 7;
     private static final int MANHA = 0, TARDE = 1, NOITE = 2;
     /** Service name on TMDB (part of the name, lowercase) → TV app (HomeApps key, package). */
     private static final String[][] SERVICES = {
@@ -149,6 +149,14 @@ final class Recs {
     void removeListener(Listener l) { listeners.remove(l); }
 
     static boolean hasKey(Context c) {
+        return Simkl.enabled() || tmdbEnabled();
+    }
+
+    static boolean simklEnabled() {
+        return Simkl.enabled();
+    }
+
+    static boolean tmdbEnabled() {
         return !Config.TMDB_KEY.trim().isEmpty();
     }
 
@@ -195,9 +203,10 @@ final class Recs {
         List<Pick> list = new ArrayList<>();
         if (!hasKey(context)) return list;    // no TMDB key: no recommendations
         Map<String, Boolean> have = new HashMap<>();   // one look per app, not per title (this runs every 15 s)
+        boolean needApp = tmdbEnabled() && !simklEnabled();
         for (Pick p : picks) {
             if ((kind == null || kind.equals(p.kind))
-                    && (!p.detailed || (p.pkg != null && have.computeIfAbsent(p.pkg, this::installed)))) list.add(p);   // app missing: skip
+                    && (!p.detailed || !needApp || (p.pkg != null && have.computeIfAbsent(p.pkg, this::installed)))) list.add(p);
         }
         if (list.isEmpty()) return list;
         long hour = System.currentTimeMillis() / 3600_000L;
@@ -248,7 +257,8 @@ final class Recs {
     }
 
     private File imageFile(Pick p) {
-        return new File(new File(context.getCacheDir(), "recs"), p.backdrop.replace("/", ""));
+        String name = p.backdrop.startsWith("http") ? "omdb-" + Math.abs(p.backdrop.hashCode()) + ".jpg" : p.backdrop.replace("/", "");
+        return new File(new File(context.getCacheDir(), "recs"), name);
     }
 
     /** With a key: fetches the list if stale or the time of day (morning/afternoon/night) changed; then the details. */
@@ -385,6 +395,17 @@ final class Recs {
         return p.kind + ":" + p.id;
     }
 
+    /** Random title from the current trending list (movies, shows and Explore). */
+    Pick roulettePick() {
+        List<Pick> pool = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (String kind : new String[] {null, "movie", "tv"}) {
+            for (Pick p : now(kind)) if (seen.add(key(p))) pool.add(p);
+        }
+        if (pool.isEmpty()) return null;
+        return pool.get((int) (Math.random() * pool.size()));
+    }
+
     private void notifyListeners() {
         main.post(() -> { for (Listener l : new ArrayList<>(listeners)) l.onRecs(); });
     }
@@ -392,6 +413,11 @@ final class Recs {
     // MARK: - TMDB
 
     private void fetchList(int p) throws Exception {
+        if (Simkl.enabled()) {
+            fetchSimklList(p);
+            return;
+        }
+        if (!tmdbEnabled()) throw new IOException("no Simkl client id or TMDB key");
         // None of the services we know is on the TV (or hide_services hides them all): no region would change that.
         boolean any = false;
         for (String[] s : SERVICES) any |= installed(s[2]);
@@ -447,6 +473,46 @@ final class Recs {
         listLanguage = Ui.language;
     }
 
+    /** Live trending from Simkl (/movies/trending and /tv/trending), movies and shows alternating. */
+    private void fetchSimklList(int p) throws Exception {
+        JSONArray movies = Simkl.trendingMovies();
+        JSONArray shows = Simkl.trendingTv();
+        List<Pick> moviePicks = new ArrayList<>();
+        List<Pick> showPicks = new ArrayList<>();
+        for (int i = 0; i < movies.length() && moviePicks.size() < 20; i++) {
+            Pick pick = simklPick(movies.optJSONObject(i), "movie");
+            if (pick != null) moviePicks.add(pick);
+        }
+        for (int i = 0; i < shows.length() && showPicks.size() < 20; i++) {
+            Pick pick = simklPick(shows.optJSONObject(i), "tv");
+            if (pick != null) showPicks.add(pick);
+        }
+        List<Pick> list = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        alternate(list, seen, moviePicks, showPicks, 24);
+        if (list.isEmpty()) throw new IOException("Simkl returned no trending titles");
+        picks = list;
+        period = p;
+        listAt = System.currentTimeMillis();
+        listLanguage = Ui.language;
+    }
+
+    private static Pick simklPick(JSONObject o, String kind) {
+        if (o == null) return null;
+        String fanart = Simkl.fanartUrl(o.optString("fanart"));
+        String image = fanart != null ? fanart : Simkl.posterUrl(o.optString("poster"));
+        if (image == null) return null;
+        Pick p = new Pick();
+        JSONObject ids = o.optJSONObject("ids");
+        p.id = ids != null ? ids.optInt("simkl_id") : o.optInt("rank");
+        p.kind = kind;
+        p.title = o.optString("title");
+        p.backdrop = image;
+        p.meta = Simkl.metaLine(o, kind);
+        p.detailed = true;
+        return p;
+    }
+
     /** Language of titles and genres (TMDB's "fr-FR", "zh-CN"…); the services come from the region. */
     private static String lang() {
         String lang = Ui.language;
@@ -492,8 +558,9 @@ final class Recs {
 
     /** Genre, runtime (or seasons) and the service it's on, among the ones the TV has. */
     private void fetchDetails(Pick p) throws Exception {
+        if (!tmdbEnabled() || simklEnabled()) return;
         JSONObject o = get("/" + p.kind + "/" + p.id
-                + "?language=" + lang() + "&append_to_response=watch/providers,images&include_image_language=null," + Ui.language.replaceAll("-.*", "") + ",en");
+                + "?language=" + lang() + "&append_to_response=watch/providers,images,external_ids&include_image_language=null," + Ui.language.replaceAll("-.*", "") + ",en");
         p.title = title(p, o);
         String best = bestBackdrop(o.optJSONObject("images"));
         if (best != null) p.backdrop = best;
@@ -522,6 +589,13 @@ final class Recs {
             }
         }
         if (p.app != null) parts.add(SERVICE_NAME.get(p.app));
+        String imdb = o.optString("imdb_id");
+        if (imdb.isEmpty()) {
+            JSONObject ext = o.optJSONObject("external_ids");
+            if (ext != null) imdb = ext.optString("imdb_id");
+        }
+        String ratings = OMDb.ratingsLine(imdb);
+        if (ratings != null) parts.add(ratings);
         p.meta = String.join(" · ", parts);
         p.detailed = true;
     }
@@ -613,7 +687,8 @@ final class Recs {
     }
 
     private long sourceStamp() {
-        long stamp = (Config.TMDB_KEY.hashCode() * 31L + REGION.hashCode()) * 31L + (Config.HIDE_ANIMATION ? 1 : 0);
+        long stamp = (Config.SIMKL_CLIENT_ID.hashCode() * 31L + Config.TMDB_KEY.hashCode()) * 31L + REGION.hashCode();
+        stamp = stamp * 31L + (Config.HIDE_ANIMATION ? 1 : 0);
         for (String[] service : SERVICES) stamp = stamp * 31L + (installed(service[2]) ? service[2].hashCode() : 0);
         return stamp;
     }
@@ -625,7 +700,7 @@ final class Recs {
     }
 
     private boolean needsLink(Pick p) {
-        return linksOn() && p.pkg != null && p.link == null
+        return !simklEnabled() && linksOn() && p.pkg != null && p.link == null
                 && cache.getString(linkKey(p), null) == null && System.currentTimeMillis() >= linkRetryAt;
     }
 
@@ -718,7 +793,8 @@ final class Recs {
         //noinspection ResultOfMethodCallIgnored
         f.getParentFile().mkdirs();
         File part = new File(f.getPath() + ".part");
-        HttpURLConnection c = (HttpURLConnection) new URL(IMAGES + p.backdrop).openConnection();
+        String imageUrl = p.backdrop.startsWith("http") ? p.backdrop : IMAGES + p.backdrop;
+        HttpURLConnection c = (HttpURLConnection) new URL(imageUrl).openConnection();
         c.setConnectTimeout(8000);
         c.setReadTimeout(20000);
         try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(part)) {

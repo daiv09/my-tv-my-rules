@@ -65,7 +65,8 @@
         android:icon="@drawable/icon"
         android:banner="@drawable/banner"
         android:allowBackup="false"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config">
 
         <!-- The app's icon opens the settings (switch between Free My TV and the original home screen). -->
         <activity
@@ -111,6 +112,20 @@
 
         <!-- Fire TV: the same home screen opened as a regular app (no resumeWhilePausing, which leaves window focus on
              Amazon's paused launcher on Fire OS). -->
+        <activity
+            android:name=".AmbientActivity"
+            android:process=":home"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@style/FreeMyTV.Home" />
+
+        <activity
+            android:name=".RouletteActivity"
+            android:process=":home"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@style/FreeMyTV.Home" />
+
         <activity
             android:name=".FireHomeActivity"
             android:process=":home"
@@ -177,6 +192,10 @@
             android:name=".PhotoInbox"
             android:authorities="io.freemytv.photos"
             android:exported="true" />
+
+        <service
+            android:name=".LanRemoteService"
+            android:exported="false" />
 
         <receiver
             android:name=".HomeReceiver"

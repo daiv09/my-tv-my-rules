@@ -466,15 +466,20 @@ public class SettingsActivity extends Activity {
             String line;
             String error = recs.optString("error");
             int count = recs.optInt("count");
-            if (!hasKey) line = Ui.tr("No TMDB key: see the README (config.properties).");
+            if (!hasKey) line = Ui.tr("No picks: set simkl_client_id or tmdb_key in config.properties (see README).");
             else if (error.equals(Recs.NO_KNOWN_APPS)) line = Ui.tr("None of the TV's streaming apps can give picks.");
             else if (error.equals(Recs.NO_APPS)) line = Ui.trf("TMDB has none of the TV's apps for tmdb_region={region}.", "region", Recs.REGION);
             else if (!error.isEmpty()) line = Ui.trf("Error: {error}.", "error", error);
-            else if (count > 0) line = Ui.trf("On · {n} titles from the TV's apps, 3 new ones every hour.", "n", count);
+            else if (count > 0 && Recs.simklEnabled()) line = Ui.trf("On · {n} trending titles from Simkl, 3 new ones every hour.", "n", count);
+            else if (count > 0 && Recs.tmdbEnabled()) line = Ui.trf("On · {n} titles from the TV's apps, 3 new ones every hour.", "n", count);
             else line = Ui.tr("Fetching titles…");
             c.drawText(TextUtils.ellipsize(line, notice, 790 * k, TextUtils.TruncateAt.END).toString(), x, y + 42 * k, notice);
             version.setTextAlign(Paint.Align.LEFT);
-            c.drawText(Ui.tr("This product uses the TMDB API but is not endorsed or certified by TMDB."), x, y + 78 * k, version);
+            if (Recs.simklEnabled()) {
+                c.drawText(Ui.tr("Trending data from Simkl (simkl.com)."), x, y + 78 * k, version);
+            } else if (Recs.tmdbEnabled()) {
+                c.drawText(Ui.tr("This product uses the TMDB API but is not endorsed or certified by TMDB."), x, y + 78 * k, version);
+            }
             if (!Config.WATCHMODE_KEY.trim().isEmpty()) {
                 c.drawText(Ui.tr("Links to the titles by Watchmode."), x, y + 108 * k, version);
             }

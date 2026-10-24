@@ -302,6 +302,10 @@ final class HomeApps {
         device(c, items, "keystone", Ui.tr("Keystone"), "keystone", new Intent("action.htcsettings.prjsettings"));
         device(c, items, "mirroring", Ui.tr("Screen Mirroring"), "cast",
                 new Intent().setComponent(new ComponentName("com.softwinner.miracastReceiver", "com.softwinner.miracastReceiver.Miracast")));
+        if (Recs.hasKey(c)) {
+            device(c, items, "roulette", Ui.tr("Surprise Me"), "play",
+                    new Intent(c, RouletteActivity.class));
+        }
         return items;
     }
 

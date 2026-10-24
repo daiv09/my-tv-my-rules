@@ -1,8 +1,12 @@
 package io.freemytv;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -17,6 +21,16 @@ import android.widget.TextView;
 public class HomeActivity extends Activity {
     private HomeView home;
     private int prefsVersion = Prefs.version;   // settings changed while we were away: start over
+    private final BroadcastReceiver lanRemote = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (home == null || !LanRemoteService.ACTION_KEY.equals(intent.getAction())) return;
+            int code = intent.getIntExtra(LanRemoteService.EXTRA_KEYCODE, 0);
+            if (code == 0) return;
+            long now = System.currentTimeMillis();
+            home.onKey(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0));
+            home.onKey(new KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0));
+        }
+    };
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -48,9 +62,23 @@ public class HomeActivity extends Activity {
             return;
         }
         if (home != null) home.resume();
+        if (Config.LAN_REMOTE) {
+            IntentFilter filter = new IntentFilter(LanRemoteService.ACTION_KEY);
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(lanRemote, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(lanRemote, filter);
+            }
+        }
     }
 
     @Override protected void onPause() {
+        if (Config.LAN_REMOTE) {
+            try {
+                unregisterReceiver(lanRemote);
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
         if (home != null) home.pause();
         super.onPause();
     }
